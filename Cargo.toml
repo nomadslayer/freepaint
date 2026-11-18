@@ -1,0 +1,42 @@
+[package]
+name = "freepaint"
+version = "0.1.0-alpha"
+edition = "2021"
+description = "A classic-style raster paint program for macOS and Linux"
+license = "MIT"
+
+[dependencies]
+eframe = "0.31.1"
+egui = "0.31.1"
+resvg = { version = "0.45.1", default-features = false }
+tiny-skia = "0.11.4"
+image = { version = "0.25", default-features = false, features = ["png", "jpeg", "bmp", "gif", "tiff", "ico", "webp"] }
+rfd = "0.15"
+arboard = "3.4"
+ab_glyph = "0.2"
+
+[profile.dev]
+opt-level = 1
+
+[profile.dev.package."*"]
+opt-level = 3
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+strip = true
+
+[package.metadata.deb]
+maintainer = "nomadslayer <nomadslayer@users.noreply.github.com>"
+copyright = "2026, nomadslayer"
+section = "graphics"
+priority = "optional"
+depends = "$auto"
+extended-description = """A classic paint program for macOS and Linux with two switchable looks: \
+the classic Windows 10 ribbon and the Windows 11 toolbar with light and dark themes. \
+Layers, 23 shapes, 9 brushes, selections, text, zoom and CUPS printing."""
+assets = [
+    ["target/release/freepaint", "usr/bin/", "755"],
+    ["assets/linux/freepaint.desktop", "usr/share/applications/", "644"],
+    ["assets/linux/freepaint.png", "usr/share/icons/hicolor/256x256/apps/", "644"],
+]
