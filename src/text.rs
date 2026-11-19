@@ -119,26 +119,39 @@ fn walk(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
     }
 }
 
-/// English family name from a face's name table (typographic name preferred).
+/// Family name from a face's name table, strongly preferring English
+/// (UI fonts here cannot draw CJK names).
 fn family_name(face: &ttf_parser::Face) -> Option<String> {
-    let mut family = None;
-    let mut typographic = None;
+    // priority: windows en-US > any windows English > unicode platform > anything
+    let mut best: Option<(u8, String)> = None;
     for n in face.names() {
         let id = n.name_id;
         if id != ttf_parser::name_id::FAMILY && id != ttf_parser::name_id::TYPOGRAPHIC_FAMILY {
             continue;
         }
         let Some(s) = n.to_string() else { continue };
-        let is_english = n.language_id == 0x0409 || n.platform_id == ttf_parser::PlatformId::Macintosh;
-        let slot = if id == ttf_parser::name_id::TYPOGRAPHIC_FAMILY { &mut typographic } else { &mut family };
-        if slot.is_none() || is_english {
-            *slot = Some(s);
-            if is_english && id == ttf_parser::name_id::TYPOGRAPHIC_FAMILY {
-                break;
-            }
+        if s.trim().is_empty() {
+            continue;
+        }
+        let lang_rank = match n.platform_id {
+            ttf_parser::PlatformId::Windows if n.language_id == 0x0409 => 0,
+            ttf_parser::PlatformId::Windows if n.language_id & 0xFF == 0x09 => 1,
+            ttf_parser::PlatformId::Unicode => 2,
+            _ if n.language_id == 0 => 2,
+            _ => 3,
+        };
+        // typographic family wins over plain family at the same language rank
+        let rank = lang_rank * 2 + if id == ttf_parser::name_id::TYPOGRAPHIC_FAMILY { 0 } else { 1 };
+        if best.as_ref().is_none_or(|(r, _)| rank < *r) {
+            best = Some((rank, s));
         }
     }
-    typographic.or(family)
+    best.map(|(_, s)| s)
+}
+
+/// True when a name can be shown by the UI font (has some ASCII letters).
+fn displayable(name: &str) -> bool {
+    name.chars().any(|c| c.is_ascii_alphanumeric())
 }
 
 enum Source {
@@ -279,9 +292,14 @@ impl FontLib {
                 if face.tables().glyf.is_none() && face.tables().cff.is_none() {
                     continue;
                 }
-                let Some(name) = family_name(&face) else { continue };
+                let mut name = family_name(&face).unwrap_or_default();
+                // a font with no readable (Latin) name is listed by its file name
+                if !displayable(&name) {
+                    let stem = file.file_stem().map(|s| s.to_string_lossy().into_owned()).unwrap_or_default();
+                    name = if count > 1 { format!("{stem} {}", index + 1) } else { stem };
+                }
                 // hidden system families start with a dot
-                if name.is_empty() || name.starts_with('.') {
+                if name.is_empty() || name.starts_with('.') || !displayable(&name) {
                     continue;
                 }
                 let slot = (face.is_bold() as usize) + ((face.is_italic() as usize) << 1);
@@ -522,6 +540,11 @@ mod tests {
         let arial = full.faces.iter().position(|f| f.name == "Arial" || f.name == "Helvetica" || f.name == "DejaVu Sans");
         assert!(arial.is_some(), "no common family found");
         assert!(full.faces.iter().all(|f| !f.name.starts_with('.')));
+        // every listed name must be drawable by the UI font
+        let bad: Vec<&str> = full.faces.iter().filter(|f| !f.name.chars().any(|c| c.is_ascii_alphanumeric())).map(|f| f.name.as_str()).collect();
+        assert!(bad.is_empty(), "undisplayable names: {bad:?}");
+        let nonascii: Vec<&str> = full.faces.iter().filter(|f| !f.name.is_ascii()).map(|f| f.name.as_str()).collect();
+        println!("names with non-ASCII chars: {nonascii:?}");
     }
 
     #[test]
@@ -538,3 +561,4 @@ mod tests {
         assert_eq!(li, lay.lines.len() - 1);
     }
 }
+
