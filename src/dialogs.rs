@@ -56,6 +56,10 @@ pub struct PrintState {
 pub enum Dialog {
     ResizeSkew(ResizeState),
     Print(PrintState),
+    /// A newer release exists on GitHub.
+    Update { current: String, info: crate::update::UpdateInfo },
+    /// Neutral information message.
+    Info(String),
     Properties(PropState),
     EditColors(Box<ColorState>),
     Unsaved(PendingAction),
@@ -272,6 +276,14 @@ impl PaintApp {
         let outcome = match &mut dlg {
             Dialog::ResizeSkew(st) => self.resize_dialog(ctx, st),
             Dialog::Print(st) => self.print_dialog(ctx, st),
+            Dialog::Update { current, info } => {
+                let (current, info) = (current.clone(), info.clone());
+                self.update_dialog(ctx, &current, &info)
+            }
+            Dialog::Info(msg) => {
+                let msg = msg.clone();
+                self.info_dialog(ctx, &msg)
+            }
             Dialog::Properties(st) => self.properties_dialog(ctx, st),
             Dialog::EditColors(st) => self.colors_dialog(ctx, st),
             Dialog::Unsaved(action) => {
@@ -305,6 +317,55 @@ impl PaintApp {
                 }
             },
             None => None,
+        }
+    }
+
+    fn update_dialog(&mut self, ctx: &Context, current: &str, info: &crate::update::UpdateInfo) -> Outcome {
+        let mut out_action = 0;
+        let out = chrome(ctx, self.dialog_nonce, "Update available", 360.0, |ui| {
+            ui.add_space(12.0);
+            ui.label(RichText::new(format!("Free Paint {} is available.", info.version.trim_start_matches('v'))).font(theme::bold(14.0)));
+            ui.add_space(4.0);
+            ui.label(format!("You have version {current}. The download page has the macOS .dmg and the Ubuntu .deb."));
+            match buttons_row(ui, &["Download", "Later"]) {
+                Some(0) => {
+                    out_action = 1;
+                    Outcome::Close
+                }
+                Some(_) => Outcome::Close,
+                None => Outcome::Keep,
+            }
+        });
+        if out_action == 1 {
+            ctx.open_url(egui::OpenUrl::new_tab(&info.url));
+            return Outcome::Close;
+        }
+        out
+    }
+
+    fn info_dialog(&mut self, ctx: &Context, msg: &str) -> Outcome {
+        let mut close = false;
+        let out = chrome(ctx, self.dialog_nonce, "Free Paint", 380.0, |ui| {
+            ui.horizontal_top(|ui| {
+                let (r, _) = ui.allocate_exact_size(vec2(32.0, 32.0), Sense::hover());
+                let c = r.center();
+                let accent = if theme::modern() { theme::w().accent } else { Color32::from_rgb(31, 111, 208) };
+                ui.painter().circle_filled(c, 15.0, accent);
+                let on = if theme::modern() { theme::w().on_accent } else { Color32::WHITE };
+                ui.painter().circle_filled(egui::pos2(c.x, c.y - 6.5), 1.8, on);
+                ui.painter().rect_filled(Rect::from_min_size(egui::pos2(c.x - 1.7, c.y - 3.0), vec2(3.4, 10.0)), 1.0, on);
+                ui.add_space(8.0);
+                ui.label(msg);
+            });
+            if buttons_row(ui, &["OK"]).is_some() {
+                close = true;
+            }
+            Outcome::Keep
+        });
+        if close {
+            Outcome::Close
+        } else {
+            out
         }
     }
 

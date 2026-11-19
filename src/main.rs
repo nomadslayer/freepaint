@@ -14,6 +14,7 @@ mod script;
 mod shapes;
 mod text;
 mod theme;
+mod update;
 mod widgets;
 
 use std::path::PathBuf;
@@ -38,6 +39,20 @@ fn parse_args() -> StartupOptions {
             }
             "--maximized" => opts.maximized = true,
             "--dump-state" => opts.dump = args.next().map(PathBuf::from),
+            "--font" => opts.font = args.next(),
+            "--pretend-version" => opts.pretend_version = args.next(),
+            "--check-updates" => {
+                let cur = opts.pretend_version.clone().unwrap_or_else(|| env!("CARGO_PKG_VERSION").into());
+                match update::check(&cur) {
+                    update::UpdateResult::UpToDate(v) => println!("up-to-date current={cur} latest={v}"),
+                    update::UpdateResult::Available(i) => println!("update-available current={cur} latest={} url={}", i.version, i.url),
+                    update::UpdateResult::Failed(e) => {
+                        eprintln!("check failed: {e}");
+                        std::process::exit(1);
+                    }
+                }
+                std::process::exit(0);
+            }
             "--write-iconset" => {
                 let dir = args.next().map(PathBuf::from).unwrap_or_else(|| PathBuf::from("AppIcon.iconset"));
                 std::process::exit(match write_iconset(&dir) {

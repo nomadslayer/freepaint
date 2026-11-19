@@ -33,7 +33,9 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-        run: gh release upload "$TAG" target/debian/*.deb --clobber
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --prerelease --title "Free Paint ${TAG#v}" --generate-notes || true
+          gh release upload "$TAG" target/debian/*.deb --clobber
 
   macos-dmg:
     runs-on: macos-latest
@@ -53,4 +55,6 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
-        run: gh release upload "$TAG" FreePaint-*.dmg --clobber
+        run: |
+          gh release view "$TAG" >/dev/null 2>&1 || gh release create "$TAG" --prerelease --title "Free Paint ${TAG#v}" --generate-notes || true
+          gh release upload "$TAG" FreePaint-*.dmg --clobber

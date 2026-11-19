@@ -4,7 +4,8 @@
 //! loaded lazily. A bundled font (Selawik, OFL) is always available.
 
 use std::cell::OnceCell;
-use std::path::PathBuf;
+use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use ab_glyph::{point, Font, FontArc, GlyphId, PxScale, ScaleFont};
 use egui::Color32;
@@ -80,8 +81,69 @@ fn font_dirs() -> Vec<PathBuf> {
     v
 }
 
+/// All font files under the system font directories.
+fn font_files() -> Vec<PathBuf> {
+    let mut bases: Vec<PathBuf> = vec![
+        PathBuf::from("/System/Library/Fonts"),
+        PathBuf::from("/Library/Fonts"),
+        PathBuf::from("/usr/share/fonts"),
+        PathBuf::from("/usr/local/share/fonts"),
+    ];
+    if let Ok(home) = std::env::var("HOME") {
+        let home = PathBuf::from(home);
+        bases.push(home.join("Library/Fonts"));
+        bases.push(home.join(".fonts"));
+        bases.push(home.join(".local/share/fonts"));
+    }
+    let mut out = Vec::new();
+    for b in bases {
+        walk(&b, 0, &mut out);
+    }
+    out.sort();
+    out.dedup();
+    out
+}
+
+fn walk(dir: &Path, depth: u32, out: &mut Vec<PathBuf>) {
+    if depth > 4 {
+        return;
+    }
+    let Ok(rd) = std::fs::read_dir(dir) else { return };
+    for e in rd.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            walk(&p, depth + 1, out);
+        } else if matches!(p.extension().and_then(|e| e.to_str()).map(|e| e.to_ascii_lowercase()).as_deref(), Some("ttf" | "otf" | "ttc")) {
+            out.push(p);
+        }
+    }
+}
+
+/// English family name from a face's name table (typographic name preferred).
+fn family_name(face: &ttf_parser::Face) -> Option<String> {
+    let mut family = None;
+    let mut typographic = None;
+    for n in face.names() {
+        let id = n.name_id;
+        if id != ttf_parser::name_id::FAMILY && id != ttf_parser::name_id::TYPOGRAPHIC_FAMILY {
+            continue;
+        }
+        let Some(s) = n.to_string() else { continue };
+        let is_english = n.language_id == 0x0409 || n.platform_id == ttf_parser::PlatformId::Macintosh;
+        let slot = if id == ttf_parser::name_id::TYPOGRAPHIC_FAMILY { &mut typographic } else { &mut family };
+        if slot.is_none() || is_english {
+            *slot = Some(s);
+            if is_english && id == ttf_parser::name_id::TYPOGRAPHIC_FAMILY {
+                break;
+            }
+        }
+    }
+    typographic.or(family)
+}
+
 enum Source {
-    Path(PathBuf),
+    /// Font file and face index (for .ttc collections).
+    Path(PathBuf, u32),
     Static(&'static [u8]),
 }
 
@@ -95,7 +157,7 @@ impl FontFace {
     fn get(&self, variant: usize) -> Option<FontArc> {
         self.loaded[variant]
             .get_or_init(|| match self.sources[variant].as_ref()? {
-                Source::Path(p) => FontArc::try_from_vec(std::fs::read(p).ok()?).ok(),
+                Source::Path(p, i) => ab_glyph::FontVec::try_from_vec_and_index(std::fs::read(p).ok()?, *i).ok().map(FontArc::from),
                 Source::Static(b) => FontArc::try_from_slice(b).ok(),
             })
             .clone()
@@ -172,7 +234,7 @@ impl FontLib {
                 for n in names {
                     let p = d.join(n);
                     if p.is_file() {
-                        return Some(Source::Path(p));
+                        return Some(Source::Path(p, 0));
                     }
                 }
             }
@@ -201,6 +263,60 @@ impl FontLib {
             .find_map(|n| faces.iter().position(|f| f.name == *n))
             .unwrap_or(0);
         Self { faces, default_face }
+    }
+
+    /// Every installed font family, discovered by reading each font file's
+    /// name table. Slow-ish (it opens every font file), so it runs on a
+    /// background thread; the curated `load()` list is used until it is done.
+    pub fn scan_system() -> Self {
+        let mut families: HashMap<String, [Option<Source>; 4]> = HashMap::new();
+        for file in font_files() {
+            let Ok(data) = std::fs::read(&file) else { continue };
+            let count = ttf_parser::fonts_in_collection(&data).unwrap_or(1);
+            for index in 0..count {
+                let Ok(face) = ttf_parser::Face::parse(&data, index) else { continue };
+                // outline fonts only (skips bitmap and emoji fonts)
+                if face.tables().glyf.is_none() && face.tables().cff.is_none() {
+                    continue;
+                }
+                let Some(name) = family_name(&face) else { continue };
+                // hidden system families start with a dot
+                if name.is_empty() || name.starts_with('.') {
+                    continue;
+                }
+                let slot = (face.is_bold() as usize) + ((face.is_italic() as usize) << 1);
+                let entry = families.entry(name).or_default();
+                if entry[slot].is_none() {
+                    entry[slot] = Some(Source::Path(file.clone(), index));
+                }
+            }
+        }
+        // keep the curated list as a fallback for families the scan missed
+        let basic = Self::load();
+        let mut faces: Vec<FontFace> = families
+            .into_iter()
+            .map(|(name, sources)| FontFace { name, sources, loaded: Default::default() })
+            .collect();
+        for b in basic.faces {
+            if !faces.iter().any(|f| f.name == b.name) {
+                faces.push(b);
+            }
+        }
+        faces.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        let default_face = ["Calibri", "Arial", "Helvetica", "Liberation Sans", "DejaVu Sans", "Noto Sans", "Selawik"]
+            .iter()
+            .find_map(|n| faces.iter().position(|f| f.name == *n))
+            .unwrap_or(0);
+        Self { faces, default_face }
+    }
+
+    /// Run the full system scan on a background thread.
+    pub fn spawn_scan() -> std::sync::mpsc::Receiver<FontLib> {
+        let (tx, rx) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(FontLib::scan_system());
+        });
+        rx
     }
 
     /// Returns the font to use plus whether bold / italic must be synthesized.
@@ -394,6 +510,19 @@ pub fn pt_to_px(pt: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn system_scan_finds_more_than_the_curated_list() {
+        let t = std::time::Instant::now();
+        let full = FontLib::scan_system();
+        let basic = FontLib::load();
+        println!("scan: {} families (curated {}) in {:?}", full.faces.len(), basic.faces.len(), t.elapsed());
+        assert!(full.faces.len() >= basic.faces.len());
+        // every discovered face must produce a usable regular font
+        let arial = full.faces.iter().position(|f| f.name == "Arial" || f.name == "Helvetica" || f.name == "DejaVu Sans");
+        assert!(arial.is_some(), "no common family found");
+        assert!(full.faces.iter().all(|f| !f.name.starts_with('.')));
+    }
 
     #[test]
     fn layout_wraps_and_carets_are_monotonic() {

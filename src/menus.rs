@@ -16,6 +16,7 @@ enum FileItem {
     SaveAs,
     Print,
     Properties,
+    CheckUpdates,
     About,
     Exit,
 }
@@ -32,6 +33,7 @@ impl PaintApp {
             (FileItem::SaveAs, Icon::SaveAs, "Save as", true, true),
             (FileItem::Print, Icon::Print, "Print", true, false),
             (FileItem::Properties, Icon::Properties, "Properties", true, false),
+            (FileItem::CheckUpdates, Icon::Redo, "Check for updates", true, false),
             (FileItem::About, Icon::About, "About Free Paint", true, false),
             (FileItem::Exit, Icon::Exit, "Exit", true, false),
         ];
@@ -151,6 +153,7 @@ impl PaintApp {
                 FileItem::SaveAs => {}
                 FileItem::Print => self.dialog = Some(Dialog::print(self)),
                 FileItem::Properties => self.dialog = Some(Dialog::properties(self)),
+                FileItem::CheckUpdates => self.start_update_check(true),
                 FileItem::About => self.dialog = Some(Dialog::About),
                 FileItem::Exit => self.request(ctx, PendingAction::Exit),
             }

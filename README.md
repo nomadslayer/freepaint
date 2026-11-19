@@ -1,6 +1,6 @@
 # Free Paint
 
-**Source:** <https://github.com/nomadslayer/freepaint> · **Version:** 0.1.0-alpha (first edition)
+**Source:** <https://github.com/nomadslayer/freepaint> · **Version:** 0.1.1-alpha
 
 ## Download
 
@@ -58,7 +58,8 @@ always light, as Windows 10 Paint was.
   from 1 to 212px and the opacity of the pencil, brushes and shapes; the scroll wheel over a slider
   nudges it one step at a time
 - **Colors:** the 20-color palette, 10 custom slots, and an Edit Colors dialog with a spectrum and HSL/RGB fields
-- **Text:** system fonts (Arial, Times, Courier, DejaVu, Liberation, Noto… whichever are installed),
+- **Text:** every font installed on the system — the font list is discovered by scanning the
+  OS font folders (including .ttc collections) on a background thread —
   size, bold, italic, underline, strikethrough, opaque or transparent background
 - **View:** zoom from 12.5% to 800% (slider, Ctrl/Cmd + scroll, pinch), rulers, gridlines,
   status bar, thumbnail window, full-screen view
@@ -66,6 +67,9 @@ always light, as Windows 10 Paint was.
   drag and drop, and a save-changes prompt before you lose work
 - **Clipboard:** copy and paste images with other apps through the system clipboard
 - Undo and redo (up to 50 steps)
+- **Update check:** on launch (and via Settings → Check for updates) the app quietly asks
+  GitHub for the newest release and offers the download page when one is newer. Only an
+  anonymous API request is made; nothing personal is sent.
 
 ## Build and run
 

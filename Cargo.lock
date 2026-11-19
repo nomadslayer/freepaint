@@ -1175,7 +1175,7 @@ dependencies = [
 
 [[package]]
 name = "freepaint"
-version = "0.1.0-alpha"
+version = "0.1.1-alpha"
 dependencies = [
  "ab_glyph",
  "arboard",
@@ -1185,6 +1185,7 @@ dependencies = [
  "resvg",
  "rfd",
  "tiny-skia",
+ "ttf-parser",
 ]
 
 [[package]]

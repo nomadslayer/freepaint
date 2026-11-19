@@ -63,6 +63,7 @@ enum MenuAction {
     Thumbnail,
     FullScreen,
     Theme(ThemeMode),
+    CheckUpdates,
 }
 
 /// Platform-appropriate shortcut label.
@@ -749,6 +750,9 @@ impl PaintApp {
                 *action = Some(MenuAction::Theme(mode));
             }
         }
+        if menu_row(ui, &mut self.icons, Some(Icon::Redo), "Check for updates", "", false, true, false).clicked() {
+            *action = Some(MenuAction::CheckUpdates);
+        }
         menu_separator(ui);
         if menu_row(ui, &mut self.icons, Some(Icon::About), "About Free Paint", "", false, true, false).clicked() {
             *action = Some(MenuAction::About);
@@ -989,6 +993,7 @@ impl PaintApp {
             MenuAction::Thumbnail => self.show_thumbnail = !self.show_thumbnail,
             MenuAction::FullScreen => self.toggle_fullscreen_view(ctx),
             MenuAction::Theme(mode) => self.set_theme_mode(mode),
+            MenuAction::CheckUpdates => self.start_update_check(true),
         }
     }
 }

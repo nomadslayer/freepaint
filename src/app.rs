@@ -321,6 +321,8 @@ pub struct StartupOptions {
     pub size: Option<(f32, f32)>,
     pub maximized: bool,
     pub dump: Option<PathBuf>,
+    pub font: Option<String>,
+    pub pretend_version: Option<String>,
 }
 
 pub struct PaintApp {
@@ -433,6 +435,12 @@ pub struct PaintApp {
     pub direct_erase: bool,
     /// Serial for the current dialog: each new dialog gets a fresh egui Area,
     /// so remembered sizes never leak between dialogs.
+    /// Full system font list arriving from the background scan.
+    pub font_rx: Option<std::sync::mpsc::Receiver<FontLib>>,
+    pub pending_font: Option<String>,
+    /// Update check running in the background, and whether the user asked for it.
+    pub update_rx: Option<std::sync::mpsc::Receiver<crate::update::UpdateResult>>,
+    pub update_manual: bool,
     pub dialog_nonce: u64,
     pub dialog_kind: Option<std::mem::Discriminant<crate::dialogs::Dialog>>,
     /// Open layer context menu: position and the frame it opened on.
@@ -547,6 +555,10 @@ impl PaintApp {
             thumbs_stale: true,
             checker: None,
             direct_erase: false,
+            font_rx: Some(FontLib::spawn_scan()),
+            pending_font: startup.font.clone(),
+            update_rx: None,
+            update_manual: false,
             dialog_nonce: 0,
             dialog_kind: None,
             layer_menu: None,
@@ -561,6 +573,11 @@ impl PaintApp {
             app.brush_previews.push(cc.egui_ctx.load_texture(format!("brush-{kind:?}"), raster::to_color_image(&pm), TextureOptions::LINEAR));
             let pm = crate::brush::preview_colored(kind, 96, 64, Color32::from_rgb(235, 235, 235));
             app.brush_previews_dark.push(cc.egui_ctx.load_texture(format!("brush-dark-{kind:?}"), raster::to_color_image(&pm), TextureOptions::LINEAR));
+        }
+        // quiet update check at startup; skipped in screenshot/test runs unless
+        // a pretend version asks for it
+        if startup.screenshot.is_none() || startup.pretend_version.is_some() {
+            app.update_rx = Some(crate::update::spawn_check(app.current_version()));
         }
         if let Some(p) = startup.open {
             app.open_path(&p);
@@ -654,6 +671,52 @@ impl PaintApp {
         match (self.canvas_resize, &self.drag) {
             (Some(r), Drag::CanvasResize { .. }) => (r.w as u32, r.h as u32),
             _ => (self.img_w(), self.img_h()),
+        }
+    }
+
+    pub fn current_version(&self) -> String {
+        self.startup.pretend_version.clone().unwrap_or_else(|| env!("CARGO_PKG_VERSION").into())
+    }
+
+    pub fn start_update_check(&mut self, manual: bool) {
+        self.update_manual = manual;
+        self.update_rx = Some(crate::update::spawn_check(self.current_version()));
+    }
+
+    fn poll_background(&mut self, ctx: &Context) {
+        if let Some(rx) = &self.font_rx {
+            match rx.try_recv() {
+                Ok(lib) => {
+                    let keep = self.pending_font.take().or_else(|| self.fonts.faces.get(self.text.face).map(|f| f.name.clone()));
+                    self.fonts = lib;
+                    self.text.face = keep
+                        .and_then(|n| self.fonts.faces.iter().position(|f| f.name.eq_ignore_ascii_case(&n)))
+                        .unwrap_or(self.fonts.default_face);
+                    self.font_rx = None;
+                    self.display_dirty = true;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => ctx.request_repaint_after(std::time::Duration::from_millis(200)),
+                Err(_) => self.font_rx = None,
+            }
+        }
+        if let Some(rx) = &self.update_rx {
+            match rx.try_recv() {
+                Ok(result) => {
+                    self.update_rx = None;
+                    use crate::update::UpdateResult::*;
+                    match result {
+                        Available(info) => self.dialog = Some(Dialog::Update { current: self.current_version(), info }),
+                        UpToDate(latest) if self.update_manual => {
+                            self.dialog = Some(Dialog::Info(format!("Free Paint is up to date.\n\nYou have version {} and the newest release is {}.", self.current_version(), latest)));
+                        }
+                        Failed(e) if self.update_manual => self.dialog = Some(Dialog::Info(format!("Could not check for updates.\n\n{e}"))),
+                        _ => {}
+                    }
+                    self.update_manual = false;
+                }
+                Err(std::sync::mpsc::TryRecvError::Empty) => ctx.request_repaint_after(std::time::Duration::from_millis(300)),
+                Err(_) => self.update_rx = None,
+            }
         }
     }
 
@@ -1380,7 +1443,9 @@ impl PaintApp {
     fn handle_screenshot(&mut self, ctx: &Context) {
         let Some(path) = self.startup.screenshot.clone() else { return };
         let script_running = self.script.as_ref().is_some_and(|s| !s.is_done());
-        if script_running {
+        // keep test captures deterministic: wait for the background font scan
+        let scan_running = self.font_rx.is_some() && self.frame_no < 1200;
+        if script_running || scan_running {
             ctx.request_repaint();
             return;
         }
@@ -1394,6 +1459,8 @@ impl PaintApp {
         if let Some(dump) = &self.startup.dump {
             if !ctx.input(|i| i.raw.events.is_empty()) || self.frame_no == ready_at {
                 let mut out = format!("layers={} active={} tool={:?} zoom={} canvas={}x{} dirty={}\n", self.layers.len(), self.active_layer, self.tool, self.zoom, self.img_w(), self.img_h(), self.doc.dirty);
+                let face = self.fonts.faces.get(self.text.face).map(|f| f.name.as_str()).unwrap_or("?");
+                out.push_str(&format!("font={} faces={} scanning={}\n", face, self.fonts.faces.len(), self.font_rx.is_some()));
                 for (i, l) in self.layers.iter().enumerate() {
                     let mut colored = 0usize;
                     let mut transparent = 0usize;
@@ -1435,6 +1502,7 @@ impl eframe::App for PaintApp {
         self.frame_no += 1;
         self.now = ctx.input(|i| i.time);
         self.sync_look(ctx);
+        self.poll_background(ctx);
         self.overlay_rects_prev = std::mem::take(&mut self.overlay_rects);
         self.input_blocked = self.popup.is_some() || self.file_menu_open || self.w11_menu.is_some() || self.context_menu.is_some() || self.layer_menu.is_some() || self.dialog.is_some();
         self.handle_close(ctx);
