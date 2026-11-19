@@ -1175,7 +1175,7 @@ dependencies = [
 
 [[package]]
 name = "freepaint"
-version = "0.1.1-alpha"
+version = "0.1.2-alpha"
 dependencies = [
  "ab_glyph",
  "arboard",
